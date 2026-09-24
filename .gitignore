@@ -1,0 +1,24 @@
+
+
+# Metrics output
+metrics/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.venv_old/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment variables / secrets
+.env
+
+# MLflow local artifacts
+mlruns/
+mlflow.db
+
+# OS
+.DS_Store
+Thumbs.db

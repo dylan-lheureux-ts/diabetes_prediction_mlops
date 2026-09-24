@@ -1,0 +1,38 @@
+name: config
+
+# Model options:
+# logistic_regression, random_forest, gradient_boosting
+model_type: logistic_regression
+
+# Target variable
+target_column: diabetes
+
+# Train/test split
+test_size: 0.2
+random_state: 42
+
+# Missing-value handling:
+# median or drop
+handle_missing: median
+
+# Scale numeric features
+scale_features: true
+
+# Columns to exclude from training
+features_to_drop: []
+
+# Logistic Regression hyperparameters
+lr_C: 1.0
+
+# Random Forest hyperparameters
+rf_n_estimators: 200
+rf_max_depth: 10
+
+# Gradient Boosting hyperparameters
+gb_n_estimators: 200
+gb_learning_rate: 0.05
+gb_max_depth: 3
+
+# Minimum model performance thresholds
+min_accuracy: 0.70
+min_f1: 0.50
