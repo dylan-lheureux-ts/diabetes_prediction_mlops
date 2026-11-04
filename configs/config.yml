@@ -1,7 +1,7 @@
 name: config
 
 # Model options:
-# logistic_regression, random_forest, gradient_boosting
+# logistic_regression, random_forest, xgboost
 model_type: logistic_regression
 
 # Target variable
@@ -9,6 +9,7 @@ target_column: diabetes
 
 # Train/test split
 test_size: 0.2
+validation_size: 0.25
 random_state: 42
 
 # Missing-value handling:
@@ -22,17 +23,27 @@ scale_features: true
 features_to_drop: []
 
 # Logistic Regression hyperparameters
-lr_C: 1.0
+lr_C: 0.01
 
 # Random Forest hyperparameters
-rf_n_estimators: 200
-rf_max_depth: 10
+rf_n_estimators: 500
+rf_max_depth: 12
 
-# Gradient Boosting hyperparameters
-gb_n_estimators: 200
-gb_learning_rate: 0.05
-gb_max_depth: 3
+# XGBoost hyperparameters
+xgb_n_estimators: 400
+xgb_learning_rate: 0.04
+xgb_max_depth: 3
+xgb_subsample: 0.8
+xgb_colsample_bytree: 0.8
+
+# Threshold search range
+threshold_min: 0.2
+threshold_max: 0.8
+threshold_step: 0.01
 
 # Minimum model performance thresholds
-min_accuracy: 0.70
-min_f1: 0.50
+min_accuracy: 0.80
+min_fbeta: 0.70
+
+# Beta value for Fbeta score calculation
+fbeta_beta: 1.6

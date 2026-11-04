@@ -6,21 +6,25 @@ import mlflow
 import mlflow.sklearn
 import pandas as pd
 import yaml
+if __package__:
+    from .evaluate import (
+        evaluate_predictions,
+        find_best_threshold,
+    )
+else:
+    from evaluate import (
+        evaluate_predictions,
+        find_best_threshold,
+    )
 
 from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import (
-    accuracy_score,
-    precision_score,
-    recall_score,
-    f1_score,
-    roc_auc_score,
-)
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from xgboost import XGBClassifier
 
 
 # ============================================================
@@ -260,52 +264,21 @@ def build_model(config):
             class_weight="balanced",
         )
 
-    if model_type == "gradient_boosting":
+    if model_type == "xgboost":
 
-        return GradientBoostingClassifier(
-            n_estimators=config["gb_n_estimators"],
-            learning_rate=config["gb_learning_rate"],
-            max_depth=config["gb_max_depth"],
+        return XGBClassifier(
+            n_estimators=config["xgb_n_estimators"],
+            learning_rate=config["xgb_learning_rate"],
+            max_depth=config["xgb_max_depth"],
+            subsample=config["xgb_subsample"],
+            colsample_bytree=config["xgb_colsample_bytree"],
+            objective="binary:logistic",
             random_state=config["random_state"],
+            n_jobs=-1,
         )
-
     raise ValueError(
         f"Unknown model type: {model_type}"
     )
-
-
-# ============================================================
-# Evaluation
-# ============================================================
-
-def calculate_metrics(y_true, y_pred, y_prob):
-    """Calculate classification evaluation metrics."""
-
-    return {
-        "accuracy": accuracy_score(
-            y_true,
-            y_pred,
-        ),
-        "precision": precision_score(
-            y_true,
-            y_pred,
-            zero_division=0,
-        ),
-        "recall": recall_score(
-            y_true,
-            y_pred,
-            zero_division=0,
-        ),
-        "f1_score": f1_score(
-            y_true,
-            y_pred,
-            zero_division=0,
-        ),
-        "auc_roc": roc_auc_score(
-            y_true,
-            y_prob,
-        ),
-    }
 
 
 # ============================================================
@@ -331,10 +304,10 @@ def run_experiment(config):
         X, y, n_rows = load_data(config)
 
         # ----------------------------------------------------
-        # Train/test split
+        # Train / validation / test split
         # ----------------------------------------------------
 
-        X_train, X_test, y_train, y_test = (
+        X_train_val, X_test, y_train_val, y_test = (
             train_test_split(
                 X,
                 y,
@@ -344,14 +317,27 @@ def run_experiment(config):
             )
         )
 
+        X_train, X_val, y_train, y_val = (
+         train_test_split(
+                X_train_val,
+                y_train_val,
+                test_size=config["validation_size"],
+                random_state=config["random_state"],
+                stratify=y_train_val,
+            )
+        )
+
         print(
             f"Training rows: {len(X_train):,}"
         )
 
         print(
-            f"Testing rows: {len(X_test):,}"
+            f"Validation rows: {len(X_val):,}"
         )
 
+        print(
+         f"Testing rows: {len(X_test):,}"
+        )
         # ----------------------------------------------------
         # Build complete ML pipeline
         # ----------------------------------------------------
@@ -420,6 +406,32 @@ def run_experiment(config):
             ),
         )
 
+        mlflow.log_param(
+            "validation_size",
+            config["validation_size"],
+        )
+
+        mlflow.log_param(
+            "threshold_min",
+            config["threshold_min"],
+        )
+
+        mlflow.log_param(
+            "threshold_max",
+            config["threshold_max"],
+        )
+
+        mlflow.log_param(
+            "threshold_step",
+            config["threshold_step"],
+        )
+
+        mlflow.log_param(
+            "fbeta_beta",
+            config["fbeta_beta"],
+        )
+        
+
         # ----------------------------------------------------
         # Log model-specific hyperparameters
         # ----------------------------------------------------
@@ -445,21 +457,29 @@ def run_experiment(config):
                 config["rf_max_depth"],
             )
 
-        elif model_type == "gradient_boosting":
+        elif model_type == "xgboost":
 
             mlflow.log_param(
                 "n_estimators",
-                config["gb_n_estimators"],
+                config["xgb_n_estimators"],
             )
 
             mlflow.log_param(
                 "learning_rate",
-                config["gb_learning_rate"],
+                config["xgb_learning_rate"],
             )
 
             mlflow.log_param(
                 "max_depth",
-                config["gb_max_depth"],
+                config["xgb_max_depth"],
+            )
+            mlflow.log_param(
+                "subsample",
+                config["xgb_subsample"],
+            )
+            mlflow.log_param(
+                "colsample_bytree",
+                config["xgb_colsample_bytree"],
             )
 
         # ----------------------------------------------------
@@ -476,59 +496,112 @@ def run_experiment(config):
             y_train,
         )
 
-        # ----------------------------------------------------
-        # Predictions
-        # ----------------------------------------------------
-
-        y_pred = pipeline.predict(X_test)
-
-        y_prob = pipeline.predict_proba(
-            X_test
-        )[:, 1]
-
-        # ----------------------------------------------------
-        # Metrics
-        # ----------------------------------------------------
-
-        metrics = calculate_metrics(
-            y_test,
-            y_pred,
-            y_prob,
+        validation_probabilities = (
+            pipeline.predict_proba(X_val)[:, 1]
         )
 
-        rounded_metrics = {
-            key: round(value, 4)
-            for key, value in metrics.items()
-        }
-
-        rounded_metrics["train_size"] = len(
-            X_train
-        )
-
-        rounded_metrics["test_size"] = len(
-            X_test
-        )
-
-        rounded_metrics["n_features"] = (
-            X_train.shape[1]
-        )
-
-        # ----------------------------------------------------
-        # Log metrics to MLflow
-        # ----------------------------------------------------
-
-        for metric_name in [
-            "accuracy",
-            "precision",
-            "recall",
-            "f1_score",
-            "auc_roc",
-        ]:
-
-            mlflow.log_metric(
-                metric_name,
-                rounded_metrics[metric_name],
+        best_threshold, validation_metrics = (
+            find_best_threshold(
+                y_val,
+                validation_probabilities,
+                threshold_min=config[
+                    "threshold_min"
+                ],
+                threshold_max=config[
+                    "threshold_max"
+                ],
+                threshold_step=config[
+                    "threshold_step"
+                ],
+                beta=config[
+                    "fbeta_beta"
+                ],
             )
+        )
+
+        print(
+            f"\nBest validation threshold: "
+            f"{best_threshold:.2f}"
+        )
+
+        print(
+            f"Validation F1: "
+            f"{validation_metrics['f1_score']:.4f}"
+        )
+
+        print(
+            f"Validation Fbeta: "
+            f"{validation_metrics['fbeta_score']:.4f}"
+        )
+
+        print(
+            f"Validation Precision: "
+            f"{validation_metrics['precision']:.4f}"
+        )
+
+        print(
+            f"Validation Recall: "
+            f"{validation_metrics['recall']:.4f}"
+        )
+
+        print(
+            f"Validation AUC-ROC: "
+            f"{validation_metrics['auc_roc']:.4f}"
+        )
+
+        print(
+            f"Validation AUC-PR: "
+            f"{validation_metrics['auc_pr']:.4f}"
+        )
+
+        # ----------------------------------------------------
+        # Log validation metrics to MLflow
+        # ----------------------------------------------------
+
+        mlflow.log_metric(
+            "validation_accuracy",
+            validation_metrics["accuracy"],
+        )
+
+        mlflow.log_metric(
+            "validation_precision",
+            validation_metrics["precision"],
+        )
+
+        mlflow.log_metric(
+            "validation_recall",
+            validation_metrics["recall"],
+        )
+
+        mlflow.log_metric(
+            "validation_f1",
+            validation_metrics["f1_score"],
+        )
+
+        mlflow.log_metric(
+            "validation_fbeta",
+            validation_metrics["fbeta_score"],
+        )
+
+        mlflow.log_metric(
+            "validation_auc_roc",
+            validation_metrics["auc_roc"],
+        )
+
+        mlflow.log_metric(
+            "validation_auc_pr",
+            validation_metrics["auc_pr"],
+        )
+
+        mlflow.log_param(
+            "best_threshold",
+            best_threshold,
+        )
+
+        mlflow.log_param(
+            "fbeta_beta",
+            config["fbeta_beta"],
+        )
 
         # ----------------------------------------------------
         # Performance thresholds
@@ -539,33 +612,33 @@ def run_experiment(config):
             0.0,
         )
 
-        min_f1 = config.get(
-            "min_f1",
+        min_fbeta = config.get(
+            "min_fbeta",
             0.0,
         )
 
         if (
-            rounded_metrics["accuracy"]
+            validation_metrics["accuracy"]
             < min_accuracy
         ):
 
             print(
                 "\nWARNING: Accuracy "
-                f"{rounded_metrics['accuracy']} "
+                f"{validation_metrics['accuracy']} "
                 "is below threshold "
                 f"{min_accuracy}"
             )
 
         if (
-            rounded_metrics["f1_score"]
-            < min_f1
+            validation_metrics["fbeta_score"]
+            < min_fbeta
         ):
 
             print(
-                "\nWARNING: F1 score "
-                f"{rounded_metrics['f1_score']} "
+                "\nWARNING: Fbeta score "
+                f"{validation_metrics['fbeta_score']} "
                 "is below threshold "
-                f"{min_f1}"
+                f"{min_fbeta}"
             )
 
         # ----------------------------------------------------
@@ -595,7 +668,14 @@ def run_experiment(config):
         # ----------------------------------------------------
         # Save metrics
         # ----------------------------------------------------
-
+        run_metrics = {
+            **validation_metrics,
+            "best_threshold": best_threshold,
+            "train_size": len(X_train),
+            "validation_size": len(X_val),
+            "test_size": len(X_test),
+            "n_features": X_train.shape[1],
+        }
         METRICS_DIR.mkdir(
             parents=True,
             exist_ok=True,
@@ -613,7 +693,7 @@ def run_experiment(config):
         ) as metrics_file:
 
             json.dump(
-                rounded_metrics,
+                run_metrics,
                 metrics_file,
                 indent=2,
             )
@@ -629,7 +709,8 @@ def run_experiment(config):
 
         mlflow.sklearn.log_model(
             pipeline,
-            "model",
+            name="model",
+            serialization_format="cloudpickle",
         )
 
         # ----------------------------------------------------
@@ -674,28 +755,43 @@ def run_experiment(config):
         )
 
         print(
-            f"Accuracy:  "
-            f"{metrics['accuracy']:.4f}"
+            f"Best Threshold:     "
+            f"{best_threshold:.2f}"
         )
 
         print(
-            f"Precision: "
-            f"{metrics['precision']:.4f}"
+            f"Validation Accuracy:  "
+            f"{validation_metrics['accuracy']:.4f}"
         )
 
         print(
-            f"Recall:    "
-            f"{metrics['recall']:.4f}"
+            f"Validation Precision: "
+            f"{validation_metrics['precision']:.4f}"
         )
 
         print(
-            f"F1 Score:  "
-            f"{metrics['f1_score']:.4f}"
+            f"Validation Recall:    "
+            f"{validation_metrics['recall']:.4f}"
         )
 
         print(
-            f"AUC-ROC:   "
-            f"{metrics['auc_roc']:.4f}"
+            f"Validation F1 Score:  "
+            f"{validation_metrics['f1_score']:.4f}"
+        )
+
+        print(
+            f"Validation Fbeta Score:  "
+            f"{validation_metrics['fbeta_score']:.4f}"
+        )
+
+        print(
+            f"Validation AUC-ROC:   "
+            f"{validation_metrics['auc_roc']:.4f}"
+        )
+
+        print(
+            f"Validation AUC-PR:   "
+            f"{validation_metrics['auc_pr']:.4f}"
         )
 
         print(
@@ -726,7 +822,7 @@ def run_experiment(config):
         # ----------------------------------------------------
 
         if (
-            metrics["accuracy"]
+            validation_metrics["accuracy"]
             < min_accuracy
         ):
 
@@ -738,12 +834,12 @@ def run_experiment(config):
             sys.exit(1)
 
         if (
-            metrics["f1_score"]
-            < min_f1
+            validation_metrics["fbeta_score"]
+            < min_fbeta
         ):
 
             print(
-                "\nFAILED: F1 score "
+                "\nFAILED: Fbeta score "
                 "below threshold"
             )
 
