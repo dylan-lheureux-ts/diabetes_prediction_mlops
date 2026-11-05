@@ -8,3 +8,4 @@ dvc[s3]==3.67.1
 xgboost==3.4.1
 openai==3.44.0
 python-dotenv==1.2.4
+streamlit==1.66.1
