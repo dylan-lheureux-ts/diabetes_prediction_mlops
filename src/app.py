@@ -414,37 +414,123 @@ def predict_diabetes(
     }
 
 
+def get_prediction_context(
+    probability,
+    threshold,
+):
+    difference = probability - threshold
+
+    if difference <= -0.10:
+        return (
+            "The prediction is well below "
+            "the classification threshold."
+        )
+
+    elif difference <= -0.05:
+        return (
+            "The prediction is below "
+            "the classification threshold."
+        )
+
+    elif difference < 0.05:
+        return (
+            "The prediction is very close "
+            "to the classification threshold."
+        )
+
+    elif difference < 0.10:
+        return (
+            "The prediction is above "
+            "the classification threshold."
+        )
+
+    else:
+        return (
+            "The prediction is well above "
+            "the classification threshold."
+        )
+
+
 def format_prediction_response(result):
     """
-    Create a basic user-facing response.
-
-    The LLM layer can later expand this into a more
-    conversational explanation.
+    Create a user-facing response that explains
+    the model prediction relative to its threshold.
     """
 
+    probability = result["probability"]
+    threshold = result["threshold"]
+
     probability_percent = (
-        result["probability"] * 100
+        probability * 100
+    )
+
+    threshold_percent = (
+        threshold * 100
+    )
+
+    difference = (
+        probability - threshold
+    )
+
+    difference_percent = (
+        abs(difference) * 100
     )
 
     if result["prediction"] == 1:
         prediction_text = (
-            "The model predicts a higher likelihood "
-            "of diabetes."
+            "The model classifies this case "
+            "as above the diabetes prediction threshold."
         )
     else:
         prediction_text = (
-            "The model predicts a lower likelihood "
-            "of diabetes."
+            "The model classifies this case "
+            "as below the diabetes prediction threshold."
+        )
+
+    if difference <= -0.10:
+        context_text = (
+            "The estimated probability is well below "
+            "the model's classification threshold."
+        )
+
+    elif difference <= -0.05:
+        context_text = (
+            "The estimated probability is below "
+            "the model's classification threshold."
+        )
+
+    elif difference < 0.05:
+        context_text = (
+            "The estimated probability is very close "
+            "to the model's classification threshold."
+        )
+
+    elif difference < 0.10:
+        context_text = (
+            "The estimated probability is above "
+            "the model's classification threshold."
+        )
+
+    else:
+        context_text = (
+            "The estimated probability is well above "
+            "the model's classification threshold."
         )
 
     return (
         f"{prediction_text} "
         f"Estimated model probability: "
         f"{probability_percent:.1f}%. "
+        f"Classification threshold: "
+        f"{threshold_percent:.1f}%. "
+        f"{context_text} "
+        f"The prediction is "
+        f"{difference_percent:.1f} percentage points "
+        f"from the decision threshold. "
         "This prediction is for educational purposes "
-        "and is not a medical diagnosis. Please consult a "
-        "healthcare professional for personalized medical "
-        "advice."
+        "and is not a medical diagnosis. "
+        "Please consult a healthcare professional "
+        "for personalized medical advice."
     )
 
 
