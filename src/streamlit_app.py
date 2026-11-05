@@ -1,6 +1,9 @@
 import streamlit as st
 
-from src.app import process_patient_request
+from src.app import (
+    answer_prediction_question,
+    process_patient_request,
+)
 
 
 # ============================================================
@@ -38,27 +41,29 @@ if "patient_text" not in st.session_state:
 if "prediction_output" not in st.session_state:
     st.session_state.prediction_output = None
 
+if "followup_question" not in st.session_state:
+    st.session_state.followup_question = ""
+
+if "followup_answer" not in st.session_state:
+    st.session_state.followup_answer = None
+
 
 # ============================================================
 # Helper functions
 # ============================================================
 
 def use_example():
-    """
-    Load the example patient into the text box.
-    """
-
     st.session_state.patient_text = EXAMPLE_TEXT
     st.session_state.prediction_output = None
+    st.session_state.followup_question = ""
+    st.session_state.followup_answer = None
 
 
 def clear_input():
-    """
-    Clear the patient description and previous result.
-    """
-
     st.session_state.patient_text = ""
     st.session_state.prediction_output = None
+    st.session_state.followup_question = ""
+    st.session_state.followup_answer = None
 
 
 # ============================================================
@@ -95,15 +100,9 @@ st.text_area(
     height=180,
 )
 
-
-# ============================================================
-# Input buttons
-# ============================================================
-
 example_col, clear_col = st.columns(2)
 
 with example_col:
-
     st.button(
         "Use Example",
         on_click=use_example,
@@ -111,7 +110,6 @@ with example_col:
     )
 
 with clear_col:
-
     st.button(
         "Clear",
         on_click=clear_input,
@@ -128,27 +126,24 @@ if st.button(
     type="primary",
     use_container_width=True,
 ):
-
     patient_text = (
         st.session_state.patient_text.strip()
     )
 
-    if not patient_text:
+    st.session_state.followup_question = ""
+    st.session_state.followup_answer = None
 
+    if not patient_text:
         st.warning(
             "Please enter a patient description first."
         )
-
         st.session_state.prediction_output = None
 
     else:
-
         try:
-
             with st.spinner(
                 "Processing patient information..."
             ):
-
                 output = process_patient_request(
                     patient_text
                 )
@@ -158,25 +153,17 @@ if st.button(
             )
 
         except ValueError as exc:
-
             st.session_state.prediction_output = None
 
             st.error(
                 f"Unable to process the request: {exc}"
             )
 
-            st.write(
-                "Please make sure the description "
-                "contains all required patient information."
-            )
-
         except FileNotFoundError as exc:
-
             st.session_state.prediction_output = None
 
             st.error(
-                "A required project file could not "
-                "be found."
+                "A required project file could not be found."
             )
 
             st.code(
@@ -184,12 +171,11 @@ if st.button(
             )
 
             st.write(
-                "Make sure the dataset and model "
-                "artifacts have been restored with DVC."
+                "Make sure the dataset and model artifacts "
+                "have been restored with DVC."
             )
 
         except Exception as exc:
-
             st.session_state.prediction_output = None
 
             st.error(
@@ -200,135 +186,277 @@ if st.button(
             with st.expander(
                 "View error details"
             ):
-
                 st.exception(exc)
 
 
 # ============================================================
-# Display prediction
+# Display request result
 # ============================================================
 
 output = st.session_state.prediction_output
 
 if output is not None:
-
-    patient = output["patient"]
-    result = output["result"]
-    response = output["response"]
-
-    probability = result["probability"]
-    threshold = result["threshold"]
-    prediction = result["prediction"]
-
-    probability_percent = (
-        probability * 100
-    )
-
-    threshold_percent = (
-        threshold * 100
+    status = output.get(
+        "status",
+        "valid",
     )
 
     st.divider()
 
-    st.success(
-        "Prediction completed successfully."
-    )
-
-    st.subheader(
-        "Prediction Result"
-    )
-
-
     # ========================================================
-    # Main metrics
+    # Out-of-scope request
     # ========================================================
 
-    col1, col2 = st.columns(2)
-
-    with col1:
-
-        st.metric(
-            "Model Probability",
-            f"{probability_percent:.1f}%",
+    if status == "out_of_scope":
+        st.info(
+            output["response"]
         )
 
-    with col2:
-
-        st.metric(
-            "Classification Threshold",
-            f"{threshold_percent:.1f}%",
-        )
-
-
     # ========================================================
-    # Classification
+    # Clarification required
     # ========================================================
 
-    if prediction == 1:
-
+    elif status == "needs_clarification":
         st.warning(
-            "The model classifies this case as "
-            "above the diabetes prediction threshold."
+            output["response"]
+            or (
+                "I need a little more information "
+                "before I can make a prediction."
+            )
         )
 
-    else:
+        issues = output.get(
+            "issues",
+            [],
+        )
+
+        if issues:
+            st.subheader(
+                "Information to Fix"
+            )
+
+            for issue in issues:
+                field = issue.get(
+                    "field",
+                    "patient information",
+                )
+
+                message = issue.get(
+                    "message",
+                    "Please review this value.",
+                )
+
+                st.write(
+                    f"**{field}:** {message}"
+                )
+
+    # ========================================================
+    # Valid prediction
+    # ========================================================
+
+    elif status == "valid":
+        patient = output["patient"]
+        result = output["result"]
+        response = output["response"]
+        feature_contributions = output.get(
+            "feature_contributions",
+            [],
+        )
+
+        probability = result["probability"]
+        threshold = result["threshold"]
+        prediction = result["prediction"]
+
+        probability_percent = (
+            probability * 100
+        )
+
+        threshold_percent = (
+            threshold * 100
+        )
 
         st.success(
-            "The model classifies this case as "
-            "below the diabetes prediction threshold."
+            "Prediction completed successfully."
         )
 
+        st.subheader(
+            "Prediction Result"
+        )
 
-    # ========================================================
-    # Explanation
-    # ========================================================
+        col1, col2 = st.columns(2)
 
-    st.subheader(
-        "Model Explanation"
-    )
+        with col1:
+            st.metric(
+                "Model Probability",
+                f"{probability_percent:.1f}%",
+            )
 
-    st.write(
-        response
-    )
+        with col2:
+            st.metric(
+                "Classification Threshold",
+                f"{threshold_percent:.1f}%",
+            )
 
+        if prediction == 1:
+            st.warning(
+                "The model classifies this case as "
+                "above the diabetes prediction threshold."
+            )
+        else:
+            st.success(
+                "The model classifies this case as "
+                "below the diabetes prediction threshold."
+            )
 
-    # ========================================================
-    # Extracted patient information
-    # ========================================================
+        # ====================================================
+        # LLM-generated explanation
+        # ====================================================
 
-    with st.expander(
-        "View Extracted Patient Information"
-    ):
+        st.subheader(
+            "Model Explanation"
+        )
 
-        patient_data = {
-            "Gender": patient["gender"],
-            "Age": patient["age"],
-            "Hypertension": (
-                "Yes"
-                if patient["hypertension"] == 1
-                else "No"
+        st.write(
+            response
+        )
+
+        # ====================================================
+        # Local model contributions
+        # ====================================================
+
+        if feature_contributions:
+            with st.expander(
+                "What influenced this prediction?"
+            ):
+                st.write(
+                    "These values describe how strongly each "
+                    "feature influenced this specific model "
+                    "prediction. They do not show medical "
+                    "causation or clinical importance."
+                )
+
+                for item in feature_contributions:
+                    label = (
+                        item["feature"]
+                        .replace("_", " ")
+                        .title()
+                    )
+
+                    direction = item[
+                        "direction"
+                    ]
+
+                    influence = item[
+                        "relative_influence_percent"
+                    ]
+
+                    st.write(
+                        f"**{label}:** {direction} the model "
+                        f"output — {influence:.1f}% of the "
+                        "total local influence."
+                    )
+
+        # ====================================================
+        # Extracted patient information
+        # ====================================================
+
+        with st.expander(
+            "View Extracted Patient Information"
+        ):
+            patient_data = {
+                "Gender": patient["gender"],
+                "Age": patient["age"],
+                "Hypertension": (
+                    "Yes"
+                    if patient["hypertension"] == 1
+                    else "No"
+                ),
+                "Heart Disease": (
+                    "Yes"
+                    if patient["heart_disease"] == 1
+                    else "No"
+                ),
+                "Smoking History": (
+                    patient["smoking_history"]
+                ),
+                "BMI": patient["bmi"],
+                "HbA1c Level": (
+                    patient["HbA1c_level"]
+                ),
+                "Blood Glucose Level": (
+                    patient["blood_glucose_level"]
+                ),
+            }
+
+            for label, value in patient_data.items():
+                st.write(
+                    f"**{label}:** {value}"
+                )
+
+        # ====================================================
+        # Follow-up question about this prediction
+        # ====================================================
+
+        st.subheader(
+            "Ask About This Prediction"
+        )
+
+        st.text_input(
+            "Ask a follow-up question",
+            key="followup_question",
+            placeholder=(
+                "Example: Which feature played the biggest "
+                "role in this prediction?"
             ),
-            "Heart Disease": (
-                "Yes"
-                if patient["heart_disease"] == 1
-                else "No"
-            ),
-            "Smoking History": (
-                patient["smoking_history"]
-            ),
-            "BMI": patient["bmi"],
-            "HbA1c Level": (
-                patient["HbA1c_level"]
-            ),
-            "Blood Glucose Level": (
-                patient["blood_glucose_level"]
-            ),
-        }
+        )
 
-        for label, value in patient_data.items():
+        if st.button(
+            "Ask About Prediction",
+            use_container_width=True,
+        ):
+            question = (
+                st.session_state
+                .followup_question
+                .strip()
+            )
 
-            st.write(
-                f"**{label}:** {value}"
+            if not question:
+                st.warning(
+                    "Please enter a follow-up question."
+                )
+
+            else:
+                try:
+                    with st.spinner(
+                        "Explaining the prediction..."
+                    ):
+                        answer = (
+                            answer_prediction_question(
+                                question,
+                                patient,
+                                result,
+                                feature_contributions,
+                            )
+                        )
+
+                    st.session_state.followup_answer = (
+                        answer
+                    )
+
+                except Exception as exc:
+                    st.error(
+                        "I could not answer that follow-up "
+                        "question."
+                    )
+
+                    with st.expander(
+                        "View error details"
+                    ):
+                        st.exception(exc)
+
+        if st.session_state.followup_answer:
+            st.info(
+                st.session_state.followup_answer
             )
 
 
@@ -339,7 +467,6 @@ if output is not None:
 with st.expander(
     "What information does the model need?"
 ):
-
     st.write(
         """
         The patient description should include all
@@ -361,9 +488,9 @@ with st.expander(
     )
 
     st.write(
-        "If a required value is missing, the "
-        "application will ask for more complete "
-        "information rather than guessing."
+        "If a required value is missing, contradictory, "
+        "or invalid, the application will identify the "
+        "specific information that needs to be corrected."
     )
 
 
@@ -374,17 +501,16 @@ with st.expander(
 with st.expander(
     "How does this application work?"
 ):
-
     st.markdown(
         """
         1. You describe a patient in plain English.
-        2. The LLM extracts the eight required features.
-        3. The extracted values are validated.
-        4. The trained XGBoost model generates a probability.
-        5. The probability is compared with the selected
-           classification threshold.
-        6. The application explains the result relative
-           to that threshold.
+        2. The LLM extracts and validates the eight required features.
+        3. The trained XGBoost model generates a probability.
+        4. The probability is compared with the selected threshold.
+        5. XGBoost local feature contributions identify which inputs
+           influenced this specific prediction.
+        6. The LLM explains the fixed model result and can answer
+           grounded follow-up questions about the prediction.
         """
     )
 
