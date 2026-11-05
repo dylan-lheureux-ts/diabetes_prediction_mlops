@@ -920,8 +920,6 @@ Use plain text, not markdown.
     return content.strip()
 
 
-def get_prediction_context(
-
 def format_prediction_response(result):
     """
     Create a user-facing response that explains
