@@ -4,6 +4,7 @@ from pathlib import Path
 import os
 
 import pandas as pd
+import xgboost as xgb
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -64,10 +65,8 @@ OPENROUTER_BASE_URL = (
 
 def parse_structured_input(data):
     """
-    Validate structured patient information.
-
-    All detected problems are collected so the user can
-    correct every invalid field at the same time.
+    Validate structured patient information and report every
+    problem found in one response.
     """
 
     if not isinstance(data, dict):
@@ -76,34 +75,20 @@ def parse_structured_input(data):
         )
 
     issues = []
-
-    # ========================================================
-    # Missing values
-    # ========================================================
-
-    for feature in REQUIRED_FEATURES:
-
-        if (
-            feature not in data
-            or data[feature] is None
-        ):
-            issues.append(
-                f"{feature}: missing required value"
-            )
-
-    # Stop conversion only after identifying all missing fields
-    if issues:
-        raise ValueError(
-            "Please correct the following patient information: "
-            + "; ".join(issues)
-        )
-
     patient = {}
 
-    # ========================================================
-    # Numeric conversions
-    # ========================================================
+    # Categorical fields
+    for field in ["gender", "smoking_history"]:
+        value = data.get(field)
 
+        if value is None:
+            issues.append(
+                f"{field}: missing required value"
+            )
+        else:
+            patient[field] = str(value)
+
+    # Numeric fields
     numeric_fields = [
         "age",
         "bmi",
@@ -112,126 +97,90 @@ def parse_structured_input(data):
     ]
 
     for field in numeric_fields:
+        value = data.get(field)
+
+        if value is None:
+            issues.append(
+                f"{field}: missing required value"
+            )
+            continue
 
         try:
-            patient[field] = float(
-                data[field]
-            )
-
+            patient[field] = float(value)
         except (TypeError, ValueError):
-
             issues.append(
                 f"{field}: must be a numeric value"
             )
 
-    # ========================================================
-    # Binary conversions
-    # ========================================================
+    # Binary fields
+    for field in ["hypertension", "heart_disease"]:
+        value = data.get(field)
 
-    binary_fields = [
-        "hypertension",
-        "heart_disease",
-    ]
-
-    for field in binary_fields:
+        if value is None:
+            issues.append(
+                f"{field}: missing required value"
+            )
+            continue
 
         try:
-            patient[field] = int(
-                data[field]
-            )
+            numeric_value = float(value)
+
+            if numeric_value not in {0.0, 1.0}:
+                raise ValueError
+
+            patient[field] = int(numeric_value)
 
         except (TypeError, ValueError):
-
             issues.append(
                 f"{field}: must be 0 or 1"
             )
 
-    # ========================================================
-    # Categorical fields
-    # ========================================================
-
-    patient["gender"] = str(
-        data["gender"]
-    )
-
-    patient["smoking_history"] = str(
-        data["smoking_history"]
-    )
-
-    # ========================================================
-    # Validate all converted values
-    # ========================================================
-
-    if patient["gender"] not in VALID_GENDERS:
-
+    # Validate categorical values
+    if (
+        "gender" in patient
+        and patient["gender"] not in VALID_GENDERS
+    ):
         issues.append(
             "gender: must be Female, Male, or Other"
         )
 
     if (
-        patient["smoking_history"]
+        "smoking_history" in patient
+        and patient["smoking_history"]
         not in VALID_SMOKING_HISTORY
     ):
-
         issues.append(
             "smoking_history: invalid smoking history"
         )
 
-    if "age" in patient:
+    # Validate numeric ranges
+    if "age" in patient and patient["age"] < 0:
+        issues.append(
+            "age: cannot be negative"
+        )
 
-        if patient["age"] < 0:
+    if "bmi" in patient and patient["bmi"] <= 0:
+        issues.append(
+            "bmi: must be greater than zero"
+        )
 
-            issues.append(
-                "age: cannot be negative"
-            )
+    if (
+        "HbA1c_level" in patient
+        and patient["HbA1c_level"] <= 0
+    ):
+        issues.append(
+            "HbA1c_level: must be greater than zero"
+        )
 
-    if "bmi" in patient:
-
-        if patient["bmi"] <= 0:
-
-            issues.append(
-                "bmi: must be greater than zero"
-            )
-
-    if "HbA1c_level" in patient:
-
-        if patient["HbA1c_level"] <= 0:
-
-            issues.append(
-                "HbA1c_level: must be greater than zero"
-            )
-
-    if "blood_glucose_level" in patient:
-
-        if patient["blood_glucose_level"] <= 0:
-
-            issues.append(
-                "blood_glucose_level: must be greater than zero"
-            )
-
-    if "hypertension" in patient:
-
-        if patient["hypertension"] not in {0, 1}:
-
-            issues.append(
-                "hypertension: must be 0 or 1"
-            )
-
-
-    if "heart_disease" in patient:
-
-        if patient["heart_disease"] not in {0, 1}:
-
-            issues.append(
-                "heart_disease: must be 0 or 1"
-            )
-
-    # ========================================================
-    # Return every problem together
-    # ========================================================
+    if (
+        "blood_glucose_level" in patient
+        and patient["blood_glucose_level"] <= 0
+    ):
+        issues.append(
+            "blood_glucose_level: must be greater than zero"
+        )
 
     if issues:
-
         raise ValueError(
             "Please correct the following patient information: "
             + "; ".join(issues)
@@ -239,12 +188,10 @@ def parse_structured_input(data):
 
     return patient
 
-
 def parse_natural_language_input(text):
     """
-    Convert a natural-language patient description
-    into the validated feature dictionary required
-    by the diabetes prediction model.
+    Use the LLM to classify the request and, when appropriate,
+    extract the patient features required by the model.
     """
 
     if not isinstance(text, str):
@@ -268,175 +215,96 @@ def parse_natural_language_input(text):
         )
 
     client = OpenAI(
-        api_key=os.getenv("OPENROUTER_API_KEY"),
-        base_url="https://openrouter.ai/api/v1",
+        api_key=OPENROUTER_API_KEY,
+        base_url=OPENROUTER_BASE_URL,
     )
 
     system_prompt = """
 You are the natural-language interface for a diabetes
 prediction machine learning application.
 
-Your job is to understand the user's request and decide
-whether enough valid, unambiguous patient information exists
-to make a prediction.
-
-Return ONLY valid JSON.
-
-Use exactly this structure:
+Return ONLY valid JSON using exactly this structure:
 
 {
-    "status": "valid | needs_clarification | out_of_scope",
-    "patient": {
-        "gender": null,
-        "age": null,
-        "hypertension": null,
-        "heart_disease": null,
-        "smoking_history": null,
-        "bmi": null,
-        "HbA1c_level": null,
-        "blood_glucose_level": null
-    },
-    "issues": [
-        {
-            "field": "field_name",
-            "message": "clear explanation of the problem"
-        }
-    ],
-    "message": "conversational response for the user"
+  "status": "valid | needs_clarification | out_of_scope",
+  "patient": {
+    "gender": null,
+    "age": null,
+    "hypertension": null,
+    "heart_disease": null,
+    "smoking_history": null,
+    "bmi": null,
+    "HbA1c_level": null,
+    "blood_glucose_level": null
+  },
+  "issues": [
+    {
+      "field": "field_name",
+      "message": "clear explanation of the problem"
+    }
+  ],
+  "message": "conversational response for the user"
 }
 
-The required patient fields are:
+Required features:
+gender, age, hypertension, heart_disease, smoking_history,
+bmi, HbA1c_level, blood_glucose_level.
 
-gender
-age
-hypertension
-heart_disease
-smoking_history
-bmi
-HbA1c_level
-blood_glucose_level
+Valid gender values:
+Female, Male, Other.
 
+hypertension and heart_disease:
+0 = no, 1 = yes.
 
-VALID VALUES
+Valid smoking_history values:
+never, No Info, current, former, ever, not current.
 
-gender must be exactly one of:
+Use "valid" only when every required feature is present,
+valid, and unambiguous.
 
-Female
-Male
-Other
+Use "needs_clarification" when any feature is missing,
+invalid, ambiguous, or contradictory.
 
-hypertension must be:
+When multiple features have problems, include EVERY problem
+in the issues list. Never stop after the first problem.
 
-0 = does not have hypertension
-1 = has hypertension
+For contradictions, identify the exact field, explicitly say
+the information is contradictory, and explain what conflicted.
+Set the contradictory field to null. Never guess which
+statement is correct.
 
-heart_disease must be:
-
-0 = does not have heart disease
-1 = has heart disease
-
-smoking_history must be exactly one of:
-
-never
-No Info
-current
-former
-ever
-not current
-
-age must be numeric.
-
-bmi must be numeric.
-
-HbA1c_level must be numeric.
-
-blood_glucose_level must be numeric.
-
-
-STATUS RULES
-
-Use "valid" only when all required patient fields are
-present, valid, and unambiguous.
-
-Use "needs_clarification" when:
-
-- one or more required fields are missing
-- a value is unclear
-- a value is contradictory
-- a value is invalid
-- multiple possible interpretations exist
-
-When there are multiple problems, include EVERY problem
-in the issues list.
-
-Do not stop after finding the first problem.
-
-For every problem, identify the exact field involved.
-
-If information contradicts itself, explicitly say that
-the field is contradictory and explain what conflicted.
-
-Do not guess which conflicting statement is correct.
-
-Use "out_of_scope" when the user is asking for something
-that is not a patient prediction request, such as:
-
-- treatment recommendations
-- medication advice
-- diagnosis
-- general medical advice
-- unrelated questions
+Use "out_of_scope" for requests this model cannot answer,
+including treatment recommendations, medication advice,
+diagnosis, or unrelated questions.
 
 For out-of-scope requests, respond politely and
-conversationally.
-
-Explain that this application can help process patient
-information for the diabetes prediction model.
-
-Do not sound like an error message.
-
-Never provide medical advice.
-
-
-IMPORTANT RULES
+conversationally. Explain that this application can make and
+explain a diabetes model prediction from the eight required
+features, but cannot provide a medical diagnosis or treatment.
 
 Never invent missing patient information.
-
-Never resolve contradictions by guessing.
-
-If a required feature is missing or uncertain,
-set that feature to null.
-
-If several features have problems, identify all of them.
-
+Never provide medical advice.
 Do not make the diabetes prediction yourself.
-
 Do not include markdown.
-
 Return only JSON.
 """
 
-    response = (
-        client.chat.completions.create(
-            model=OPENROUTER_MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": system_prompt,
-                },
-                {
-                    "role": "user",
-                    "content": text,
-                },
-            ],
-            temperature=0,
-        )
+    response = client.chat.completions.create(
+        model=OPENROUTER_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": system_prompt,
+            },
+            {
+                "role": "user",
+                "content": text,
+            },
+        ],
+        temperature=0,
     )
 
-    content = (
-        response.choices[0]
-        .message.content
-    )
+    content = response.choices[0].message.content
 
     if not content:
         raise ValueError(
@@ -444,43 +312,23 @@ Return only JSON.
         )
 
     try:
-        structured_data = json.loads(
-            content
-        )
-
+        structured_data = json.loads(content)
     except json.JSONDecodeError as exc:
         raise ValueError(
             "The LLM returned invalid JSON."
         ) from exc
 
-    # ========================================================
-    # Read LLM response structure
-    # ========================================================
+    if not isinstance(structured_data, dict):
+        raise ValueError(
+            "The LLM returned an invalid response structure."
+        )
 
-    status = structured_data.get(
-        "status"
-    )
-
-    message = structured_data.get(
-        "message",
-        "",
-    )
-
-    issues = structured_data.get(
-        "issues",
-        [],
-    )
-
-    patient_data = structured_data.get(
-        "patient"
-    )
-
-    # ========================================================
-    # Out-of-scope request
-    # ========================================================
+    status = structured_data.get("status")
+    message = structured_data.get("message", "")
+    issues = structured_data.get("issues", [])
+    patient_data = structured_data.get("patient")
 
     if status == "out_of_scope":
-
         return {
             "status": "out_of_scope",
             "message": message,
@@ -488,12 +336,7 @@ Return only JSON.
             "patient": None,
         }
 
-    # ========================================================
-    # Missing, contradictory, ambiguous, or invalid input
-    # ========================================================
-
     if status == "needs_clarification":
-
         return {
             "status": "needs_clarification",
             "message": message,
@@ -501,14 +344,8 @@ Return only JSON.
             "patient": patient_data,
         }
 
-    # ========================================================
-    # Valid patient
-    # ========================================================
-
     if status == "valid":
-
         if patient_data is None:
-
             raise ValueError(
                 "The LLM marked the request as valid "
                 "but did not return patient information."
@@ -525,14 +362,9 @@ Return only JSON.
             "patient": patient,
         }
 
-    # ========================================================
-    # Unknown response type
-    # ========================================================
-
     raise ValueError(
         "The LLM returned an unknown request status."
     )
-
 
 def validate_patient_features(patient):
     """
@@ -585,6 +417,10 @@ def validate_patient_features(patient):
 
 
 def process_patient_request(text):
+    """
+    Process a natural-language request from extraction through
+    prediction, local model explanation, and LLM response.
+    """
 
     parsed = parse_natural_language_input(
         text
@@ -593,33 +429,42 @@ def process_patient_request(text):
     status = parsed["status"]
 
     if status == "out_of_scope":
-
         return {
             "status": "out_of_scope",
             "patient": None,
             "result": None,
             "issues": [],
+            "feature_contributions": [],
             "response": parsed["message"],
         }
 
     if status == "needs_clarification":
-
         return {
             "status": "needs_clarification",
             "patient": parsed["patient"],
             "result": None,
             "issues": parsed["issues"],
+            "feature_contributions": [],
             "response": parsed["message"],
         }
 
     patient = parsed["patient"]
+    model = load_model()
 
     result = predict_diabetes(
-        patient
+        patient,
+        model=model,
     )
 
-    response = format_prediction_response(
-        result
+    feature_contributions = explain_prediction(
+        patient,
+        model=model,
+    )
+
+    response = generate_prediction_response(
+        patient,
+        result,
+        feature_contributions,
     )
 
     return {
@@ -627,9 +472,9 @@ def process_patient_request(text):
         "patient": patient,
         "result": result,
         "issues": [],
+        "feature_contributions": feature_contributions,
         "response": response,
     }
-
 
 def patient_to_dataframe(patient):
     """
@@ -722,42 +567,360 @@ def predict_diabetes(
     }
 
 
-def get_prediction_context(
-    probability,
-    threshold,
+def _original_feature_name(transformed_name):
+    """
+    Map a transformed ColumnTransformer feature name back to
+    one of the eight original patient features.
+    """
+
+    clean_name = transformed_name.split(
+        "__",
+        1,
+    )[-1]
+
+    for feature in sorted(
+        REQUIRED_FEATURES,
+        key=len,
+        reverse=True,
+    ):
+        if (
+            clean_name == feature
+            or clean_name.startswith(
+                feature + "_"
+            )
+        ):
+            return feature
+
+    return clean_name
+
+
+def explain_prediction(
+    patient,
+    model=None,
+    top_n=8,
 ):
-    difference = probability - threshold
+    """
+    Calculate local XGBoost feature contributions for one
+    patient and aggregate one-hot encoded columns back to the
+    original patient features.
 
-    if difference <= -0.10:
-        return (
-            "The prediction is well below "
-            "the classification threshold."
+    Contribution values are model-attribution values in the
+    XGBoost margin space. They describe model influence, not
+    medical causation.
+    """
+
+    validate_patient_features(patient)
+
+    if model is None:
+        model = load_model()
+
+    if not hasattr(model, "named_steps"):
+        return []
+
+    preprocessor = model.named_steps.get(
+        "preprocessor"
+    )
+
+    classifier = model.named_steps.get(
+        "classifier"
+    )
+
+    if (
+        preprocessor is None
+        or classifier is None
+        or not hasattr(
+            classifier,
+            "get_booster",
+        )
+    ):
+        return []
+
+    patient_df = patient_to_dataframe(
+        patient
+    )
+
+    transformed = preprocessor.transform(
+        patient_df
+    )
+
+    feature_names = list(
+        preprocessor.get_feature_names_out()
+    )
+
+    booster = classifier.get_booster()
+
+    contributions = booster.predict(
+        xgb.DMatrix(transformed),
+        pred_contribs=True,
+    )[0]
+
+    # XGBoost appends the bias/base value as the last item.
+    feature_values = contributions[:-1]
+
+    if len(feature_values) != len(feature_names):
+        raise ValueError(
+            "Feature contribution output did not match "
+            "the transformed feature names."
         )
 
-    elif difference <= -0.05:
-        return (
-            "The prediction is below "
-            "the classification threshold."
+    aggregated = {}
+
+    for transformed_name, contribution in zip(
+        feature_names,
+        feature_values,
+    ):
+        original_feature = _original_feature_name(
+            transformed_name
         )
 
-    elif difference < 0.05:
-        return (
-            "The prediction is very close "
-            "to the classification threshold."
+        aggregated[original_feature] = (
+            aggregated.get(
+                original_feature,
+                0.0,
+            )
+            + float(contribution)
         )
 
-    elif difference < 0.10:
-        return (
-            "The prediction is above "
-            "the classification threshold."
+    total_absolute = sum(
+        abs(value)
+        for value in aggregated.values()
+    )
+
+    ranked = sorted(
+        aggregated.items(),
+        key=lambda item: abs(item[1]),
+        reverse=True,
+    )
+
+    explanation = []
+
+    for feature, contribution in ranked[:top_n]:
+        if contribution > 0:
+            direction = "increased"
+        elif contribution < 0:
+            direction = "decreased"
+        else:
+            direction = "neutral"
+
+        if total_absolute:
+            share = (
+                abs(contribution)
+                / total_absolute
+                * 100
+            )
+        else:
+            share = 0.0
+
+        explanation.append(
+            {
+                "feature": feature,
+                "value": patient.get(feature),
+                "direction": direction,
+                "contribution": float(
+                    contribution
+                ),
+                "relative_influence_percent": float(
+                    share
+                ),
+            }
         )
 
-    else:
-        return (
-            "The prediction is well above "
-            "the classification threshold."
+    return explanation
+
+
+def generate_prediction_response(
+    patient,
+    result,
+    feature_contributions,
+):
+    """
+    Ask the LLM to explain the model's completed prediction.
+    The model result and feature contributions are supplied as
+    fixed facts that the LLM must not change.
+    """
+
+    if not OPENROUTER_API_KEY or not OPENROUTER_MODEL:
+        return format_prediction_response(
+            result
         )
 
+    client = OpenAI(
+        api_key=OPENROUTER_API_KEY,
+        base_url=OPENROUTER_BASE_URL,
+    )
+
+    grounded_data = {
+        "patient": patient,
+        "prediction": result["prediction"],
+        "probability": result["probability"],
+        "threshold": result["threshold"],
+        "feature_contributions": (
+            feature_contributions
+        ),
+    }
+
+    system_prompt = """
+You explain the output of a diabetes prediction machine
+learning model.
+
+The supplied model result is a fixed fact. Never change,
+recalculate, or contradict the prediction, probability, or
+classification threshold.
+
+Explain the result clearly and conversationally.
+
+When feature contributions are provided, you may explain
+which patient features had the greatest influence on THIS
+model prediction and whether each pushed the model output up
+or down.
+
+Feature contributions describe how the model used the input.
+They do NOT establish medical causation, diagnosis, or true
+clinical risk.
+
+If the user or data refers to a "diagnosis", gently clarify
+that this is a model prediction, not a diagnosis.
+
+Include relevant caveats and say that the result is for
+educational purposes and is not medical advice or a medical
+diagnosis.
+
+Do not recommend medications or treatments.
+Do not invent additional medical facts.
+Use plain text, not markdown.
+"""
+
+    try:
+        response = client.chat.completions.create(
+            model=OPENROUTER_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt,
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        grounded_data
+                    ),
+                },
+            ],
+            temperature=0.2,
+        )
+
+        content = (
+            response.choices[0]
+            .message.content
+        )
+
+        if content:
+            return content.strip()
+
+    except Exception:
+        pass
+
+    return format_prediction_response(
+        result
+    )
+
+
+def answer_prediction_question(
+    question,
+    patient,
+    result,
+    feature_contributions,
+):
+    """
+    Answer a follow-up question using only the completed model
+    prediction and its local feature contributions.
+    """
+
+    if not isinstance(question, str) or not question.strip():
+        raise ValueError(
+            "Please enter a question about the prediction."
+        )
+
+    if not OPENROUTER_API_KEY:
+        raise ValueError(
+            "OPENROUTER_API_KEY is not configured."
+        )
+
+    if not OPENROUTER_MODEL:
+        raise ValueError(
+            "OPENROUTER_MODEL is not configured."
+        )
+
+    client = OpenAI(
+        api_key=OPENROUTER_API_KEY,
+        base_url=OPENROUTER_BASE_URL,
+    )
+
+    context = {
+        "patient": patient,
+        "prediction": result,
+        "feature_contributions": (
+            feature_contributions
+        ),
+    }
+
+    system_prompt = """
+You answer follow-up questions about one completed diabetes
+machine learning model prediction.
+
+Use ONLY the supplied prediction data and feature
+contributions. Do not invent model behavior or medical facts.
+
+You may answer questions such as:
+- Which feature influenced my prediction the most?
+- What were the top three factors?
+- Did BMI push the prediction up or down?
+- Why was the prediction above or below the threshold?
+
+If the user says "diagnosis", gently clarify that the
+application produced a model prediction, not a diagnosis.
+
+Feature contributions describe model influence only. They do
+not prove that a feature caused diabetes.
+
+If the user asks for diagnosis, treatment, medication, or
+other medical advice, politely explain that you can explain
+the model prediction but cannot provide medical advice.
+
+Keep the answer conversational and concise.
+Use plain text, not markdown.
+"""
+
+    response = client.chat.completions.create(
+        model=OPENROUTER_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": system_prompt,
+            },
+            {
+                "role": "user",
+                "content": (
+                    "Prediction context:\n"
+                    + json.dumps(context)
+                    + "\n\nUser question:\n"
+                    + question
+                ),
+            },
+        ],
+        temperature=0.2,
+    )
+
+    content = response.choices[0].message.content
+
+    if not content:
+        raise ValueError(
+            "The LLM returned an empty response."
+        )
+
+    return content.strip()
+
+
+def get_prediction_context(
 
 def format_prediction_response(result):
     """
