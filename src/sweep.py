@@ -168,7 +168,7 @@ def run_sweep():
 
 def compare_runs():
     """
-    Compare completed MLflow runs using validation AUC-PR score.
+    Compare completed MLflow runs using validation Avg Precision score.
 
     The best run is selected using validation performance only.
 
@@ -197,7 +197,7 @@ def compare_runs():
             "attributes.status = 'FINISHED'"
         ),
         order_by=[
-            "metrics.validation_auc_pr DESC"
+            "metrics.validation_avg_precision DESC"
         ],
     )
 
@@ -205,7 +205,7 @@ def compare_runs():
     # were introduced.
     runs = runs.dropna(
         subset=[
-            "metrics.validation_auc_pr",
+            "metrics.validation_avg_precision",
         ]
     )
 
@@ -230,7 +230,7 @@ def compare_runs():
         "metrics.validation_f1",
         "metrics.validation_fbeta",
         "metrics.validation_auc_roc",
-        "metrics.validation_auc_pr",
+        "metrics.validation_avg_precision",
     ]
 
     available_columns = [
@@ -335,7 +335,7 @@ def compare_runs():
         "model_type": best_model_type,
         "best_threshold": best_threshold,
         "selection_metric": (
-            "validation_auc_pr"
+            "validation_avg_precision"
         ),
         "validation_metrics": {
             "accuracy": float(
@@ -368,9 +368,9 @@ def compare_runs():
                     "metrics.validation_auc_roc"
                 ]
             ),
-            "auc_pr": float(
+            "avg_precision": float(
                 best_run[
-                    "metrics.validation_auc_pr"
+                    "metrics.validation_avg_precision"
                 ]
             ),
         },
@@ -449,13 +449,13 @@ def compare_runs():
     )
 
     print(
-        f"Validation AUC-PR: "
-        f"{best_run['metrics.validation_auc_pr']:.4f}"
+        f"Validation Avg Precision: "
+        f"{best_run['metrics.validation_avg_precision']:.4f}"
     )
 
     print(
         "\nSelection criterion: "
-        "highest validation AUC-PR score."
+        "highest validation Avg Precision score."
     )
 
     print(
