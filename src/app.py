@@ -453,8 +453,84 @@ Return only JSON.
             "The LLM returned invalid JSON."
         ) from exc
 
-    return parse_structured_input(
-        structured_data
+    # ========================================================
+    # Read LLM response structure
+    # ========================================================
+
+    status = structured_data.get(
+        "status"
+    )
+
+    message = structured_data.get(
+        "message",
+        "",
+    )
+
+    issues = structured_data.get(
+        "issues",
+        [],
+    )
+
+    patient_data = structured_data.get(
+        "patient"
+    )
+
+    # ========================================================
+    # Out-of-scope request
+    # ========================================================
+
+    if status == "out_of_scope":
+
+        return {
+            "status": "out_of_scope",
+            "message": message,
+            "issues": [],
+            "patient": None,
+        }
+
+    # ========================================================
+    # Missing, contradictory, ambiguous, or invalid input
+    # ========================================================
+
+    if status == "needs_clarification":
+
+        return {
+            "status": "needs_clarification",
+            "message": message,
+            "issues": issues,
+            "patient": patient_data,
+        }
+
+    # ========================================================
+    # Valid patient
+    # ========================================================
+
+    if status == "valid":
+
+        if patient_data is None:
+
+            raise ValueError(
+                "The LLM marked the request as valid "
+                "but did not return patient information."
+            )
+
+        patient = parse_structured_input(
+            patient_data
+        )
+
+        return {
+            "status": "valid",
+            "message": message,
+            "issues": [],
+            "patient": patient,
+        }
+
+    # ========================================================
+    # Unknown response type
+    # ========================================================
+
+    raise ValueError(
+        "The LLM returned an unknown request status."
     )
 
 
@@ -509,14 +585,34 @@ def validate_patient_features(patient):
 
 
 def process_patient_request(text):
-    """
-    Process a natural-language patient request from
-    extraction through prediction.
-    """
 
-    patient = parse_natural_language_input(
+    parsed = parse_natural_language_input(
         text
     )
+
+    status = parsed["status"]
+
+    if status == "out_of_scope":
+
+        return {
+            "status": "out_of_scope",
+            "patient": None,
+            "result": None,
+            "issues": [],
+            "response": parsed["message"],
+        }
+
+    if status == "needs_clarification":
+
+        return {
+            "status": "needs_clarification",
+            "patient": parsed["patient"],
+            "result": None,
+            "issues": parsed["issues"],
+            "response": parsed["message"],
+        }
+
+    patient = parsed["patient"]
 
     result = predict_diabetes(
         patient
@@ -527,8 +623,10 @@ def process_patient_request(text):
     )
 
     return {
+        "status": "valid",
         "patient": patient,
         "result": result,
+        "issues": [],
         "response": response,
     }
 
