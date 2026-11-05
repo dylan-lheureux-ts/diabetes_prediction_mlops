@@ -1,0 +1,15 @@
+{
+  "run_id": "9700a58517ba4f63a8dce5ef06e968d4",
+  "model_type": "xgboost",
+  "best_threshold": 0.25,
+  "selection_metric": "validation_fbeta",
+  "validation_metrics": {
+    "accuracy": 0.9607,
+    "precision": 0.7755,
+    "recall": 0.7801,
+    "f1_score": 0.7778,
+    "fbeta_score": 0.7788,
+    "auc_roc": 0.9785,
+    "auc_pr": 0.8861
+  }
+}

@@ -1,7 +1,9 @@
-
-
 # Metrics output
-metrics/
+metrics/*
+!metrics/best_model_selection.json
+
+# Intermediate model artifact
+models/model.pkl
 
 # Python
 __pycache__/
