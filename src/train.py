@@ -550,8 +550,8 @@ def run_experiment(config):
         )
 
         print(
-            f"Validation AUC-PR: "
-            f"{validation_metrics['auc_pr']:.4f}"
+            f"Validation Avg Precision: "
+            f"{validation_metrics['avg_precision']:.4f}"
         )
 
         # ----------------------------------------------------
@@ -589,8 +589,8 @@ def run_experiment(config):
         )
 
         mlflow.log_metric(
-            "validation_auc_pr",
-            validation_metrics["auc_pr"],
+            "validation_avg_precision",
+            validation_metrics["avg_precision"],
         )
 
         mlflow.log_param(
@@ -790,8 +790,8 @@ def run_experiment(config):
         )
 
         print(
-            f"Validation AUC-PR:   "
-            f"{validation_metrics['auc_pr']:.4f}"
+            f"Validation Avg Precision:   "
+            f"{validation_metrics['avg_precision']:.4f}"
         )
 
         print(
