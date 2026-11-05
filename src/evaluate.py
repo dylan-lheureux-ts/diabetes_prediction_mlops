@@ -147,7 +147,7 @@ def evaluate_predictions(
             ),
             4,
         ),
-        "auc_pr": round(
+        "avg_precision": round(
             float(
                 average_precision_score(
                     y_true,
@@ -480,8 +480,8 @@ def run_final_evaluation():
     )
 
     print(
-        f"AUC-PR:    "
-        f"{final_metrics['auc_pr']:.4f}"
+        f"Avg Precision:    "
+        f"{final_metrics['avg_precision']:.4f}"
     )
 
     print(
