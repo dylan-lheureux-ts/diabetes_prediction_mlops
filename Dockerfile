@@ -9,26 +9,35 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Install Python dependencies first so Docker can cache this layer.
+# Install all project dependencies, including DVC with S3 support.
 COPY requirements.txt .
 
 RUN python -m pip install --upgrade pip \
     && python -m pip install -r requirements.txt
 
-# Copy only the files required by the Streamlit application.
+# Copy the application and the metadata needed at runtime.
 COPY src/ ./src/
 COPY metrics/best_model_selection.json ./metrics/best_model_selection.json
-COPY models/best_model.pkl ./models/best_model.pkl
+
+# Copy only the DVC configuration and model pointer.
+# The actual model is downloaded automatically when the
+# container starts.
+COPY .dvc/config ./.dvc/config
+COPY models/best_model.pkl.dvc ./models/best_model.pkl.dvc
+
+# Container startup script.
+COPY docker-entrypoint.sh ./docker-entrypoint.sh
 
 # Run the application as a non-root user.
 RUN useradd --create-home appuser \
-    && chown -R appuser:appuser /app
+    && chown -R appuser:appuser /app \
+    && chmod +x /app/docker-entrypoint.sh
 
 USER appuser
 
 EXPOSE 8501
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')" || exit 1
 
-CMD ["python", "-m", "streamlit", "run", "src/streamlit_app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
