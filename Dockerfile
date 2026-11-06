@@ -25,6 +25,10 @@ COPY metrics/best_model_selection.json ./metrics/best_model_selection.json
 COPY .dvc/config ./.dvc/config
 COPY models/best_model.pkl.dvc ./models/best_model.pkl.dvc
 
+# The deployment container is intentionally not a Git repository.
+# Tell DVC to operate in no-SCM mode inside the image only.
+RUN sed -i '/^\[core\]/a\    no_scm = true' /app/.dvc/config
+
 # Container startup script.
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 
