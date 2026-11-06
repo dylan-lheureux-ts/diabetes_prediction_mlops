@@ -1,0 +1,17 @@
+.git
+.github
+.venv
+.venv_old
+.env
+__pycache__
+*.pyc
+.ipynb_checkpoints
+mlruns
+mlflow.db
+data
+notebooks
+tests
+.dvc/cache
+models/model.pkl
+.DS_Store
+Thumbs.db
