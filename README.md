@@ -271,11 +271,11 @@ Structured patient information
 Threshold-aware response and disclaimer
 ```
 
-The LLM does not make the diabetes prediction itself.
+The LLM does not make the diabetes prediction itself. The trained XGBoost model is responsible for the classification and probability.
 
-Its job is only to convert the natural-language description into structured data.
+The LLM first converts the natural-language description into structured data. After the model produces its result, the application calculates local XGBoost feature contributions and passes the fixed model output back to the LLM so it can generate a clear, grounded explanation without changing the prediction.
 
-The trained machine learning model is responsible for the prediction.
+The Streamlit interface also allows follow-up questions about the completed prediction, such as which feature influenced that specific prediction the most. These explanations describe model behavior, not medical causation or diagnosis.
 
 ---
 
@@ -472,6 +472,7 @@ diabetes_prediction_mlops/
 │   ├── app.py
 │   ├── evaluate.py
 │   ├── preprocess.py
+│   ├── streamlit_app.py
 │   ├── sweep.py
 │   └── train.py
 │
@@ -480,8 +481,10 @@ diabetes_prediction_mlops/
 │   ├── test_model.py
 │   └── test_preprocessing.py
 │
+├── .dockerignore
 ├── .env.example
 ├── .gitignore
+├── docker-entrypoint.sh
 ├── Dockerfile
 ├── pytest.ini
 ├── README.md
@@ -549,21 +552,88 @@ A safe template is included in:
 
 ## Running the Application
 
-Run:
+Start the Streamlit interface with:
+
+```bash
+python -m streamlit run src/streamlit_app.py
+```
+
+The application sends a natural-language patient description through the complete pipeline:
+
+```text
+Natural language
+→ LLM extraction and request classification
+→ validation
+→ XGBoost prediction
+→ local feature contributions
+→ LLM-generated explanation
+→ optional grounded follow-up questions
+```
+
+The CLI example in `src/app.py` can also be run with:
 
 ```bash
 python src/app.py
 ```
 
-The current CLI example sends a natural-language patient description through the complete pipeline:
+
+---
+
+## Running with Docker
+
+Docker packages the application and its Python dependencies so Python, DVC, Streamlit, and the project libraries do not need to be installed manually on the host machine.
+
+The selected model remains versioned with DVC and stored in the private AWS S3 remote. The Docker image contains the DVC configuration and the model pointer, but it does not contain AWS credentials or the OpenRouter API key.
+
+When the container starts, `docker-entrypoint.sh` automatically:
+
+1. Checks whether `models/best_model.pkl` is available.
+2. Runs DVC to restore the selected model from S3 when needed.
+3. Confirms that the model was restored successfully.
+4. Starts the Streamlit application.
+
+### 1. Create the environment file
+
+Copy `.env.example` to `.env` and provide your own credentials:
 
 ```text
-Natural language
-→ LLM extraction
-→ validation
-→ machine learning prediction
-→ formatted response
+OPENROUTER_API_KEY=your_openrouter_api_key_here
+OPENROUTER_MODEL=openrouter/free
+
+AWS_ACCESS_KEY_ID=your_aws_access_key_id_here
+AWS_SECRET_ACCESS_KEY=your_aws_secret_access_key_here
+AWS_DEFAULT_REGION=us-east-1
 ```
+
+If temporary AWS credentials are used, also provide `AWS_SESSION_TOKEN`.
+
+The `.env` file is ignored by Git and is excluded from the Docker build context.
+
+### 2. Build the image
+
+From the project root:
+
+```bash
+docker build -t diabetes-prediction-app .
+```
+
+The model does not need to be pulled locally before building the image.
+
+### 3. Run the container
+
+```bash
+docker run --rm -p 8501:8501 --env-file .env diabetes-prediction-app
+```
+
+At startup, the container automatically restores the DVC-tracked model from the configured S3 remote and then launches Streamlit.
+
+Open:
+
+```text
+http://localhost:8501
+```
+
+The only host dependency required for this workflow is Docker. Access to the private model artifact still requires valid AWS credentials, and the LLM interface requires a valid OpenRouter API key.
 
 ---
 
@@ -656,6 +726,8 @@ This project uses:
 - AWS S3
 - OpenRouter
 - OpenAI Python client
+- Streamlit
+- Docker
 - Pytest
 - Git
 - GitHub
@@ -675,7 +747,7 @@ The probability produced by the model should not automatically be interpreted as
 
 The `0.25` threshold is a machine learning classification threshold selected from validation performance. It is not a medically established cutoff.
 
-The LLM is only used for structured information extraction, but LLM output can still occasionally be incorrect or malformed. For this reason, extracted values are validated before they are passed to the model.
+The LLM is used for structured information extraction and for grounded explanation of completed model predictions. LLM output can still occasionally be incorrect or malformed, so extracted values are validated before they reach the model and the final explanation is grounded in fixed model outputs and local feature contributions.
 
 The application is intended for educational and portfolio purposes and is not a medical diagnostic system.
 
