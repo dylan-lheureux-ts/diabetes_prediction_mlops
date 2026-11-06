@@ -29,9 +29,10 @@ COPY models/best_model.pkl.dvc ./models/best_model.pkl.dvc
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 
 # Run the application as a non-root user.
-RUN useradd --create-home appuser \
-    && chown -R appuser:appuser /app \
-    && chmod +x /app/docker-entrypoint.sh
+RUN sed -i 's/\r$//' /app/docker-entrypoint.sh \
+    && chmod +x /app/docker-entrypoint.sh \
+    && useradd --create-home appuser \
+    && chown -R appuser:appuser /app
 
 USER appuser
 
