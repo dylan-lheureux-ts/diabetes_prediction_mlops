@@ -13,5 +13,6 @@ notebooks
 tests
 .dvc/cache
 models/model.pkl
+models/best_model.pkl
 .DS_Store
 Thumbs.db
